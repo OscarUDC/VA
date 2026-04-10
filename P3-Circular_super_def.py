@@ -60,6 +60,7 @@ if __name__ == "__main__":
 
             # --- FASE 3: BUCLE DE ÓRBITA CONTINUA ---
             print("Orbitando... (Presiona Ctrl+C para aterrizar)")
+            total_yaw = 0.0  # Grados acumulados para el giro
             try:
                 while True:
                     # Leemos la distancia actual al objeto (derecha)
@@ -85,16 +86,29 @@ if __name__ == "__main__":
                     mc.start_linear_motion(FORWARD_SPEED, 0.0, 0.0, rate_yaw=yaw_rate)
 
                     # Pequeña seguridad frontal: si el objeto se mueve hacia nosotros, frenar
-                    if safe_read(mr.front) < 0.3:
+                    if safe_read(mr.front) < 0.2:
                         mc.stop()
                         print("¡Alerta frontal! Frenando...")
                         time.sleep(0.5)
+
+                    # 4. Acumulamos el giro realizado
+                    total_yaw += yaw_rate * LOOP_PERIOD
+                    print(f"Giro actual: {abs(total_yaw):.1f} / 360.0 grados")
+
+                    # Si completamos los 360 grados, salimos del bucle
+                    if abs(total_yaw) >= 360.0:
+                        print("¡Circunferencia completa! Procediendo a aterrizar...")
+                        break
 
                     time.sleep(LOOP_PERIOD)
 
             except KeyboardInterrupt:
                 print("\nInterrupción detectada. Aterrizando de forma segura...")
-                mc.stop()
-                mc.land()
+
+            # --- FINALIZACIÓN ---
+            print("Aterrizando...")
+            mc.stop()
+            mc.land()
+            time.sleep(2)  # Esperar a que toque suelo
 
     print("=== MISIÓN FINALIZADA ===")
