@@ -19,13 +19,13 @@ from cflib.positioning.motion_commander import MotionCommander
 from cflib.utils import uri_helper
 
 # --- Configuración de Conexión ---
-URI = uri_helper.uri_from_env(default="radio://0/80/2M/E7E7E7E701")
+URI = uri_helper.uri_from_env(default="radio://0/80/2M/E7E7E7E702")
 
 # --- Parámetros de Comportamiento ---
 FORWARD_SPEED = 0.15  # m/s (Velocidad de avance tangencial)
 THRESHOLD_FRONT = 0.3  # m (Distancia para detectar el objeto al inicio)
 THRESHOLD_SIDE = 0.3  # m (Distancia ideal/radio de la órbita)
-KP_YAW = 25.0  # Ganancia: a mayor valor, giros más agresivos
+KP_YAW = 25  # Ganancia: a mayor valor, giros más agresivos
 LOOP_PERIOD = 0.1  # s (Frecuencia de actualización de 10Hz)
 
 
@@ -77,7 +77,7 @@ if __name__ == "__main__":
                     yaw_rate = error_side * KP_YAW
 
                     # Limitamos la rotación para mantener la estabilidad (máx 80 grad/s)
-                    yaw_rate = np.clip(yaw_rate, -85, 85)
+                    yaw_rate = np.clip(yaw_rate, -45, 45)
 
                     # 3. Ejecutamos el movimiento combinado
                     # Avanzamos (X) mientras rotamos sobre nuestro eje (Yaw)
