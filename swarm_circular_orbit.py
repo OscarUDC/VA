@@ -19,28 +19,13 @@ URI_LIST = [
     "radio://0/80/2M/E7E7E7E702",  # Crazyflie #2
 ]
 
-# Shared behavior parameters (same as single-drone script)
+# Parámetros de Comportamiento (exacto a P3-Circular_super_def.py)
 DEFAULT_HEIGHT = 0.4
-FORWARD_SPEED = 0.15
-THRESHOLD_FRONT = 0.3
-THRESHOLD_SIDE = 0.3
-KP_YAW = 25.0
-LOOP_PERIOD = 0.1
-
-SIDE_DEADBAND = 0.05
-MAX_YAW_RATE = 55.0
-
-SIDE_LOST_DISTANCE = 1.2
-LOST_CYCLES_TO_RECOVER = 3
-RECOVERY_YAW_RATE = 24.0
-RECOVERY_REORIENT_YAW_RATE = 32.0
-RECOVERY_FORWARD_SPEED = 0.04
-FRONT_REORIENT_THRESHOLD = 0.45
-FRONT_CONFIRM_CYCLES = 2
-REVERSE_REORIENT_CYCLES = 6
-REACQUIRE_BAND = 0.12
-REACQUIRE_STABLE_CYCLES = 2
-FRONT_HARD_STOP = 0.05
+FORWARD_SPEED = 0.15  # m/s (Velocidad de avance tangencial)
+THRESHOLD_FRONT = 0.3  # m (Distancia para detectar el objeto al inicio)
+THRESHOLD_SIDE = 0.3   # m (Distancia ideal/radio de la órbita)
+KP_YAW = 25            # Ganancia: a mayor valor, giros más agresivos
+LOOP_PERIOD = 0.1      # s (Frecuencia de actualización de 10Hz)
 
 
 def safe_read(dist):
@@ -48,101 +33,74 @@ def safe_read(dist):
 
 
 def swarm_circular_orbit(scf):
+    """Órbita circular suave (cilíndrica) para cada dron en el enjambre."""
     uri = scf.cf.link_uri
-    print(f"[{uri}] Starting circular orbit behavior")
+    print(f"[{uri}] === INICIANDO ÓRBITA CIRCULAR ===")
 
     with MotionCommander(scf, default_height=DEFAULT_HEIGHT) as mc, Multiranger(scf) as mr:
         time.sleep(1.0)
 
-        # Phase 1: approach front object
-        print(f"[{uri}] Searching object at front...")
+        # --- FASE 1: APROXIMACIÓN ---
+        print(f"[{uri}] Buscando objeto al frente...")
         while safe_read(mr.front) > THRESHOLD_FRONT:
             mc.start_linear_motion(0.1, 0.0, 0.0)
             time.sleep(LOOP_PERIOD)
 
         mc.stop()
-        print(f"[{uri}] Object found. Moving object to right side...")
+        print(f"[{uri}] Objeto detectado. Posicionando costado derecho...")
 
-        # Phase 2: initial orientation for right-side orbit
+        # --- FASE 2: GIRO INICIAL ---
+        # Giramos 90 grados para que el objeto quede a nuestra derecha
         mc.turn_left(90)
         time.sleep(1.0)
 
-        # Phase 3: orbit loop
-        mode = "ORBIT"
-        lost_counter = 0
-        reacquire_counter = 0
-        front_near_counter = 0
-        reverse_reorient_counter = 0
+        # --- FASE 3: BUCLE DE ÓRBITA CONTINUA ---
+        print(f"[{uri}] Orbitando... (Presiona Ctrl+C para aterrizar)")
+        total_yaw = 0.0  # Grados acumulados para el giro
+        
+        try:
+            while True:
+                # Leemos la distancia actual al objeto (derecha)
+                dist_right = safe_read(mr.right)
 
-        while True:
-            dist_front = safe_read(mr.front)
-            raw_right = mr.right
-            dist_right = safe_read(raw_right)
-            side_visible = raw_right is not None and dist_right < SIDE_LOST_DISTANCE
+                # 1. Calculamos el error de distancia
+                # error > 0: estamos muy cerca
+                # error < 0: estamos muy lejos
+                error_side = THRESHOLD_SIDE - dist_right
 
-            if mode == "ORBIT":
-                if side_visible:
-                    lost_counter = 0
+                # 2. Calculamos la velocidad de rotación (Yaw Rate)
+                # Usamos la fórmula: Yaw = Error * Ganancia
+                # Si estamos cerca, el yaw será positivo (giro izquierda) para alejarnos.
+                # Si estamos lejos, el yaw será negativo (giro derecha) para cerrarnos.
+                yaw_rate = error_side * KP_YAW
 
-                    error_side = THRESHOLD_SIDE - dist_right
-                    if abs(error_side) < SIDE_DEADBAND:
-                        error_side = 0.0
+                # Limitamos la rotación para mantener la estabilidad (máx 45 grad/s)
+                yaw_rate = np.clip(yaw_rate, -45, 45)
 
-                    yaw_rate = error_side * KP_YAW
-                    yaw_rate = float(np.clip(yaw_rate, -MAX_YAW_RATE, MAX_YAW_RATE))
+                # 3. Ejecutamos el movimiento combinado
+                # Avanzamos (X) mientras rotamos sobre nuestro eje (Yaw)
+                # Esto genera una trayectoria curva perfecta
+                mc.start_linear_motion(FORWARD_SPEED, 0.0, 0.0, rate_yaw=yaw_rate)
 
-                    mc.start_linear_motion(FORWARD_SPEED, 0.0, 0.0, rate_yaw=yaw_rate)
-                else:
-                    lost_counter += 1
-                    mc.start_linear_motion(
-                        RECOVERY_FORWARD_SPEED,
-                        0.0,
-                        0.0,
-                        rate_yaw=RECOVERY_YAW_RATE,
-                    )
-                    if lost_counter >= LOST_CYCLES_TO_RECOVER:
-                        mode = "RECOVERY"
-                        reacquire_counter = 0
-                        front_near_counter = 0
-                        reverse_reorient_counter = 0
-                        print(f"[{uri}] Side reference lost -> RECOVERY")
+                # Pequeña seguridad frontal: si el objeto se mueve hacia nosotros, frenar
+                if safe_read(mr.front) < 0.2:
+                    mc.stop()
+                    print(f"[{uri}] ¡Alerta frontal! Frenando...")
+                    time.sleep(0.5)
 
-            else:  # RECOVERY
-                if dist_front < FRONT_REORIENT_THRESHOLD:
-                    front_near_counter += 1
-                else:
-                    front_near_counter = 0
+                # 4. Acumulamos el giro realizado
+                total_yaw += yaw_rate * LOOP_PERIOD
+                print(f"[{uri}] Giro actual: {abs(total_yaw):.1f} / 360.0 grados")
 
-                if front_near_counter >= FRONT_CONFIRM_CYCLES:
-                    reverse_reorient_counter = REVERSE_REORIENT_CYCLES
-                    front_near_counter = 0
+                # Si completamos los 360 grados, salimos del bucle
+                if abs(total_yaw) >= 360.0:
+                    print(f"[{uri}] ¡Circunferencia completa! Procediendo a aterrizar...")
+                    break
 
-                if reverse_reorient_counter > 0:
-                    cmd_forward = 0.0
-                    cmd_yaw = -RECOVERY_REORIENT_YAW_RATE
-                    reverse_reorient_counter -= 1
-                else:
-                    cmd_forward = RECOVERY_FORWARD_SPEED
-                    cmd_yaw = RECOVERY_YAW_RATE
+                time.sleep(LOOP_PERIOD)
 
-                mc.start_linear_motion(cmd_forward, 0.0, 0.0, rate_yaw=cmd_yaw)
-
-                if side_visible and abs(dist_right - THRESHOLD_SIDE) <= REACQUIRE_BAND:
-                    reacquire_counter += 1
-                else:
-                    reacquire_counter = 0
-
-                if reacquire_counter >= REACQUIRE_STABLE_CYCLES:
-                    mode = "ORBIT"
-                    lost_counter = 0
-                    print(f"[{uri}] Side reference recovered -> ORBIT")
-
-            if dist_front < FRONT_HARD_STOP:
-                mc.stop()
-                print(f"[{uri}] Front hard stop triggered")
-                time.sleep(0.3)
-
-            time.sleep(LOOP_PERIOD)
+        except KeyboardInterrupt:
+            print(f"[{uri}] Interrupción detectada. Aterrizando de forma segura...")
 
 
 def main():
@@ -151,8 +109,8 @@ def main():
 
     factory = CachedCfFactory(rw_cache="./cache")
 
-    print("=== Starting SWARM circular orbit ===")
-    print("Configured URIs:")
+    print("=== INICIANDO ENJAMBRE DE ÓRBITA CIRCULAR ===")
+    print("URIs configurados:")
     for uri in URI_LIST:
         print(f" - {uri}")
 
