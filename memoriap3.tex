@@ -1,0 +1,102 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{geometry}
+\geometry{a4paper, margin=2.5cm}
+\usepackage{hyperref}
+\usepackage{parskip}
+\usepackage{listings}
+
+\title{\textbf{Memoria de Práctica: Navegación Autónoma y Órbita de Obstáculos}}
+\author{Vehículos Autónomos}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introducción y Objetivos}
+La práctica se centra en la integración avanzada del \textit{Multi-Ranger Deck}, el cual dota al dron de sensores de distancia láser de tiempo de vuelo (ToF) en cinco direcciones: adelante, atrás, izquierda, derecha y arriba \cite{6}. Para complementar esta percepción y garantizar una navegación robusta, se integra el \textit{Flow Deck v2}. Este último es fundamental para el éxito de la misión, ya que proporciona estabilidad mediante flujo óptico y cubre la medición de distancia hacia abajo (la única dirección no cubierta por el Multi-Ranger), permitiendo un control de altura preciso y evitando derivas laterales durante maniobras complejas \cite{10, 53}.
+
+El objetivo principal es programar una lógica de control reactivo que permita al dron navegar de forma autónoma, detectando obstáculos y ejecutando maniobras de circunnavegación precisas.
+
+Los hitos específicos del proyecto se definen de la siguiente manera:
+\begin{itemize}
+    \item \textbf{Hito 1: Navegación y Detección:} Implementación de un avance lineal autónomo con detección de obstáculos desconocidos en la trayectoria frontal.
+    \item \textbf{Hito 2: Maniobra de Transición:} Ejecución de un giro coordinado para lograr un posicionamiento lateral relativo al objeto detectado.
+    \item \textbf{Hito 3: Control de Órbita Circular:} Mantenimiento de una trayectoria de 360$^\circ$ alrededor del obstáculo, utilizando un control proporcional para estabilizar la distancia lateral constante.
+    \item \textbf{Hito 4: Estabilidad y Aterrizaje:} Garantizar la estabilidad del sistema durante toda la misión mediante la fusión de datos de ambos \textit{decks} y proceder a un aterrizaje seguro tras completar la circunferencia.
+\end{itemize} 
+
+\section{Configuración del Sistema y Hardware}
+El sistema se basa en la combinación de periféricos y librerías que permiten una percepción completa del entorno y estabilidad en el vuelo autónomo.
+
+\subsection{Hardware Utilizado}
+La plataforma física se compone de los siguientes elementos:
+\begin{itemize}
+    \item \textbf{Crazyflie 2.1}: Plataforma de vuelo base de alta agilidad.
+    \item \textbf{Multi-Ranger Deck}: Equipa al dron con sensores de distancia láser de tiempo de vuelo (ToF) que le permiten detectar objetos en cinco direcciones: adelante, atrás, izquierda, derecha y arriba[cite: 6]. Esta configuración proporciona una percepción tridimensional del entorno[cite: 7].
+    \item \textbf{Flow Deck v2}: La inclusión del \textit{Flow Deck} es fundamental para mejorar la estabilidad y precisión del vuelo, combinando la información de ambos sistemas para una navegación más robusta[cite: 10]. Aporta dos ventajas técnicas principales:
+    \begin{enumerate}
+        \item \textbf{Complemento de Percepción:} El Multi-Ranger no cubre la dirección inferior. El Flow Deck aporta la medición de distancia hacia abajo, completando el volumen de detección y permitiendo el control preciso de la altura.
+        \item \textbf{Estabilidad Horizontal:} Mediante su sensor de flujo óptico, permite que el dron mantenga su posición X-Y, limitando las derivas durante las maniobras complejas.
+    \end{enumerate}
+\end{itemize}
+\subsection{Librerías y Entorno de Software}
+El desarrollo del algoritmo se realizó mediante un script en Python basado en la librería \texttt{cflib}[cite: 12]. Las clases y utilidades fundamentales empleadas para el control son:
+\begin{itemize}
+    \item \textbf{SyncCrazyflie}: Gestiona la conexión y el ciclo de vida del dron[cite: 14].
+    \item \textbf{MotionCommander}: Interfaz de alto nivel responsable de los comandos de vuelo relativos (avanzar, girar, etc.)[cite: 16].
+    \item \textbf{Multiranger}: Obtiene y gestiona las mediciones de distancia síncronas proporcionadas por el deck Multi-Ranger[cite: 18].
+\end{itemize}
+
+\section{Metodología y Descripción de la Tarea}
+El desarrollo de la solución técnica se fundamenta en la adaptación y extensión del script base proporcionado en el enunciado de la práctica. El código original ha sido modificado significativamente para transitar de un comportamiento de seguimiento de muros a uno de circunnavegación completa, estructurando la lógica de control en tres fases secuenciales. El objetivo final es que el dron busque un objeto, se oriente tangencialmente a él y lo orbite manteniendo una distancia radial constante mediante el ajuste dinámico de su tasa de rotación (\textit{yaw}).
+
+\subsection{Fase 1: Aproximación y Detección}
+El dron inicia la misión avanzando linealmente a una velocidad constante (\texttt{FORWARD\_SPEED} = 0.15 m/s) y emplea el sensor frontal para detectar objetos a una distancia inferior a 0.3 metros (\texttt{THRESHOLD\_FRONT}). Para asegurar la robustez de esta fase, se implementó la función auxiliar \texttt{safe\_read}[cite: 41, 45]. Esta función enmascara las lecturas nulas (\texttt{None})—habituales cuando el sensor no detecta nada—asignándoles un valor artificialmente alto para evitar que se active prematuramente la lógica de evasión o cercanía.
+
+\subsection{Fase 2: Posicionamiento Inicial}
+Tras la detección exitosa del objeto, el dron detiene por completo su avance lineal. A fin de preparar la trayectoria orbital, ejecuta un giro estático de $90^\circ$ sobre su eje vertical hacia la izquierda. Esta maniobra posiciona el obstáculo directamente en el campo de visión del sensor lateral derecho, permitiendo que el control proporcional tome el relevo en la siguiente fase.
+
+\subsection{Fase 3: Órbita Circular y Control de Finalización}
+La fase final consiste en un bucle continuo en el que el dron avanza tangencialmente a 0.15 m/s mientras regula dinámicamente su velocidad de rotación (\textit{yaw\_rate}). Este ajuste se realiza a través de un controlador proporcional (P) que evalúa el error entre la distancia lateral objetivo (\texttt{THRESHOLD\_SIDE} = 0.3 m) y la medición real obtenida por el sensor derecho (\texttt{dist\_right}):
+
+\begin{equation}
+    \text{error\_side} = \text{THRESHOLD\_SIDE} - \text{dist\_right}
+\end{equation}
+\begin{equation}
+    \text{yaw\_rate} = \text{error\_side} \times \text{KP\_YAW}
+\end{equation}
+
+El dron combina el comando de avance lineal con la rotación calculada sobre su eje (\texttt{rate\_yaw=yaw\_rate}), describiendo así una trayectoria curva ininterrumpida alrededor del obstáculo. Para garantizar la estabilidad del vuelo y evitar comandos extremos, la velocidad de rotación resultante se limitó a valores seguros utilizando la función \texttt{np.clip}.
+
+Además, para que el sistema sea capaz de reconocer de forma autónoma cuándo ha completado la vuelta, se ha implementado un mecanismo de **acumulación de giro**. En cada iteración del bucle, el programa multiplica la velocidad de rotación actual por el periodo de muestreo (\texttt{LOOP\_PERIOD}) para obtener el ángulo infinitesimal recorrido:
+
+\begin{equation}
+    \theta_{total} = \sum (\text{yaw\_rate} \times \text{LOOP\_PERIOD})
+\end{equation}
+
+Cuando el valor absoluto de este sumatorio alcanza o supera los 360$^\circ$, el dron identifica que la circunferencia ha sido completada, sale del bucle de control y procede a realizar un aterrizaje seguro y controlado.
+
+\section{Análisis de Resultados y Dificultades}
+Durante las pruebas experimentales para conseguir una órbita circular suave, surgieron diferentes desafíos técnicos.
+
+\subsection{Dificultades en el Ajuste de la Ganancia ($K_p$)}
+Uno de los mayores desafíos fue la sintonización empírica de la ganancia \texttt{KP\_YAW} (cuyo valor final se fijó en 25).
+\begin{itemize}
+    \item \textbf{$K_p$ elevado (Sobre-corrección):} Generaba correcciones demasiado agresivas. El dron realizaba giros bruscos que provocaban inestabilidad, oscilaciones constantes (zigzagueo), dificultando una trayectoria fluida alrededor del objeto y llegando incluso a rotar de más y perder el objeto de su campo de visión.
+    \item \textbf{$K_p$ reducido (Sub-corrección):} El giro no era lo suficientemente rápido para compensar el avance lineal. Esto causaba que el dron perdiera la referencia del objeto. Al dejar de detectarlo a su derecha, el algoritmo entraba en un estado donde el dron comenzaba a girar sobre sí mismo, dando vueltas en el mismo sitio intentando buscar un obstáculo que ya había quedado atrás.
+\end{itemize}
+
+\subsection{Análisis de la Geometría del Obstáculo y Errores de Trayectoria}
+La validación se realizó empleando a una persona como obstáculo, lo cual introdujo variables complejas que no ocurren con objetos cilíndricos perfectos (como columnas):
+\begin{itemize}
+    \item \textbf{Irregularidad Morfológica (Sección Achatada):} Al utilizar un obstáculo humano, se comprobó la dificultad añadida por nuestra anatomía, que no es un cilindro perfecto, sino que presenta una sección transversal más elíptica o achatada. Esta asimetría implica que la distancia varía considerablemente dependiendo del ángulo desde el que se esté orbitando. Debido a esto, existen segmentos específicos de la órbita donde resulta mucho más difícil mantener la trayectoria correcta sin perder la referencia del sensor. Estas variaciones continuas en la distancia leída exigen una respuesta dinámica impecable, lo que implica que este reto morfológico requiere una precisión mucho mayor en el ajuste empírico de la ganancia $K_p$, buscando el punto exacto que permita reaccionar a la asimetría sin caer en la sobre-corrección inestable.
+    \item \textbf{Efecto Espiral durante la Sintonización:} Durante el proceso iterativo de ajuste de la constante, sobretodo con valores de $K_p$ bajos, se observó inicialmente un comportamiento en el que la trayectoria tendía a abrirse en una espiral de radio creciente. Esta deriva se debía a que la inercia del movimiento continuo hacia adelante, combinada con valores subóptimos del control puramente proporcional, no lograba compensar el desplazamiento lateral a tiempo. Sin embargo, una vez afinado correctamente el valor de $K_p$, este efecto se mitigó de manera efectiva, permitiendo que la tasa de rotación (\textit{yaw}) cerrara la curva de forma precisa sobre el punto de inicio.
+\end{itemize}
+
+\section{Conclusión}
+A pesar de las dificultades técnicas relacionadas con la sintonización de ganancias y la naturaleza imprevisible e irregular de los obstáculos humanos, el algoritmo desarrollado cumple exitosamente con el objetivo propuesto. Se logró programar una ruta compleja en la que el Crazyflie 2.1 avanza autónomamente, detecta un obstáculo y completa una circunferencia de 360 grados a su alrededor antes de proceder al aterrizaje seguro. Las pruebas evidencian que el equilibrio entre la velocidad tangencial y la corrección proporcional del \textit{yaw} es la clave para una navegación robusta que permita cumplir con el objetivo.
+
+\end{document}
